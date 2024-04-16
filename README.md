@@ -3,13 +3,9 @@ This repository contains the scripts necessary to reproduce the single-cell RNA-
 Following scripts contain the commands for STARsolo used for mapping raw reads and describe the basic prefiltering and cell type annotation/isolation:
 
 TailBud_SS2.Rmd
-
 Tail_Project_1wpa.Rmd
-
 Tail_col_2wpa.Rmd
-
 Tail_col_0wpa_All.Rmd
-
 Tail_twist_0wpa.Rmd
 
 
