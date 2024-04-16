@@ -2,16 +2,16 @@ This repository contains the scripts necessary to reproduce the single-cell RNA-
 
 Following scripts contain the commands for STARsolo used for mapping raw reads and describe the basic prefiltering and cell type annotation/isolation:
 
-TailBud_SS2.Rmd
-Tail_Project_1wpa.Rmd
-Tail_col_2wpa.Rmd
-Tail_col_0wpa_All.Rmd
-Tail_twist_0wpa.Rmd
+1. TailBud_SS2.Rmd
+2. Tail_Project_1wpa.Rmd
+3. Tail_col_2wpa.Rmd
+4. Tail_col_0wpa_All.Rmd
+5. Tail_twist_0wpa.Rmd
 
 
 This script was used to combine and analyze connective tissue cells of the different timepoints and samples and to perform quadratic programming:
 
-Tail_Integration_col_0_1_2wpa.Rmd
+6. Tail_Integration_col_0_1_2wpa.Rmd
 
 
 
