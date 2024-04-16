@@ -9,7 +9,7 @@ Following scripts contain the commands for STARsolo used for mapping raw reads a
 5. Tail_twist_0wpa.Rmd
 
 
-This script was used to combine and analyze connective tissue cells of the different timepoints and samples and to perform quadratic programming:
+This script was used to combine and analyze cells across the different timepoints and samples and to perform quadratic programming:
 
 6. Tail_Integration_col_0_1_2wpa.Rmd
 
