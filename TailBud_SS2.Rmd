@@ -1,0 +1,1260 @@
+---
+title: "Axolotl_EmbryonicTail_SmartSeq2"
+author: "Tobias Gerber"
+date: "May 22, 2019"
+output: html_document
+---
+
+mapping 
+```{bash}
+STAR --soloType SmartSeq --readFilesManifest ../../scManifest_HGK2TAFX2.tsv.csv --genomeDir /mnt/SingleCellGenomics/genome_data/STAR_AxolotlGenome/AmexG_v6_chr_unscaffolded/ --soloUMIdedup Exact --soloStrand Unstranded --soloFeatures Gene GeneFull Velocyto --soloCellFilter None --readFilesCommand zcat --outSAMtype BAM Unsorted --runThreadN 40 --outFileNamePrefix EmbryoniTail_SmartSeq_Full_
+
+
+```
+
+
+
+############################## Smart Seq counts from STAR solo alignment against genome ######################
+
+
+#Stage 25/30/35
+
+```{r}
+
+#Load libraries
+
+library(Seurat)
+library(dplyr)
+library(Matrix)
+library(RColorBrewer)
+
+```
+
+
+```{r}
+
+setwd("/home/tobias_gerber/Projects/SingleCellGroup/Axolotl/EmbryonicTailData_SS2/")
+
+#load annotation file
+
+anno = read.delim("/mnt/SingleCellGenomics/genome_data/10xAxolotlGenome/AnnotationFile_AmexG_v6_chr_unscaffolded_CherryGFP_v1.1.csv",sep = "\t",header = F)
+rownames(anno) = anno[,1]
+
+
+############# remove weird transposon / unannotated genes
+unannotated.transcripts = rownames(anno)[anno$V2 %in% anno$V2[grep("PEG10",anno$V2)] ]
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("L1TD1",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("RTL",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("GIN1",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("L1\\-RT",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("^N\\/A",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("^AMEX",anno$V2)] ], unannotated.transcripts))
+
+anno = anno[!rownames(anno) %in% unannotated.transcripts,]
+
+
+############# remove rp genes
+
+rp.genes_AmexG = rownames(anno)[anno$V2 %in% anno$V2[grep("RPL",anno$V2)]]
+rp.genes_AmexG = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("RPS",anno$V2)] ], rp.genes_AmexG))
+
+anno = anno[!rownames(anno) %in% rp.genes_AmexG,]
+
+
+library(tidyverse)
+
+############# get data and remove genes
+
+library(dplyr)
+library(Seurat)
+
+Tail_LB <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/Axolotl/HGK2TAFX2_EmbryonicTailData/fastq_files/all_fastq/Solo.out/Gene/raw/")
+
+Tail_LB = Tail_LB[rownames(anno), ,drop = FALSE]
+
+############# load in Seurat
+
+Tail_LB <- CreateSeuratObject(counts = Tail_LB, project = "Tail_LB", min.cells = 2, min.features = 100)
+Tail_LB
+
+############ add meta data
+
+#Stage 25 PSM: Id 127160-127252
+#Stage 30 Somite: Id 127253-127345
+#Stage 35 Somite Id 127346-127438
+
+demux = read.csv("/mnt/SingleCellGenomics/scg_projects/Axolotl/HGK2TAFX2_EmbryonicTailData/Demux_Table.csv",header = F,stringsAsFactors = F)
+demux = demux[demux$V2 %in% colnames(Tail_LB),]
+
+Tail_LB@meta.data$ID = demux$V1
+Tail_LB@meta.data$Stage[Tail_LB@meta.data$ID %in% c(127160:127252)] =  "25"
+Tail_LB@meta.data$Stage[Tail_LB@meta.data$ID %in% c(127253:127345)] =  "30"
+Tail_LB@meta.data$Stage[Tail_LB@meta.data$ID %in% c(127346:127438)] =  "35"
+
+
+
+
+```
+
+```{r}
+mito.genes <- c("ND2","ND1","ND3","ND4","ND4L","ND5","ND6")
+mito.contig <- intersect(c(rownames(anno)[anno$V2 %in% mito.genes ] , rownames(anno)[anno$V2 %in% anno$V2[grep("^COX",anno$V2)]] ) , rownames(Tail_LB))
+
+
+Tail_LB[["percent.mt"]] <- PercentageFeatureSet(Tail_LB, features = mito.contig)
+
+
+plot1 <- FeatureScatter(Tail_LB, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Tail_LB, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+
+pdf("./Tail_LB_QC_PreFilter.pdf",width=10,height=5)
+VlnPlot(Tail_LB, features = c("nCount_RNA","nFeature_RNA","percent.mt"),pt.size = -1)
+CombinePlots(plots = list(plot1, plot2))
+dev.off()
+
+Tail_LB <- subset(Tail_LB, subset = nCount_RNA < 300000  & nCount_RNA > 300  & percent.mt < 30 )
+
+plot1 <- FeatureScatter(Tail_LB, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Tail_LB, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+
+pdf("./Tail_LB_QC_PostFilter.pdf",width=10,height=5)
+VlnPlot(Tail_LB, features = c("nCount_RNA","nFeature_RNA","percent.mt"),pt.size = -1)
+CombinePlots(plots = list(plot1, plot2))
+dev.off()
+
+
+#parallize scaling
+library(future)
+plan("multiprocess", workers = 8)
+plan()
+
+#set maximum to 50GB for each worker
+options(future.globals.maxSize = 50000 * 1024^2)
+
+#normalize data
+
+Tail_LB = NormalizeData(Tail_LB,normalization.method = "RC", scale.factor = 1e6)
+
+tmp = log2(Tail_LB[["RNA"]]@data + 1)
+tmp <- as(tmp, "dgCMatrix")
+
+Tail_LB[["RNA"]]@data = tmp
+
+
+#get cell cycle genes
+
+g2m.genes <- cc.genes$g2m.genes
+g2m.contig <- intersect(rownames(anno)[anno$V2 %in% g2m.genes ] , rownames(Tail_LB) )
+
+s.genes <- cc.genes$s.genes
+s.contig <- intersect(rownames(anno)[anno$V2 %in% s.genes ] , rownames(Tail_LB) )
+
+#cell cycle scoring
+Tail_LB <- CellCycleScoring(Tail_LB, s.features = s.contig, g2m.features = g2m.contig, set.ident = TRUE)
+
+
+#scale
+#ScaleData(  object,  features = NULL,  assay = NULL,  vars.to.regress = NULL,  split.by = NULL,  model.use = "linear",  use.umi = FALSE,  do.scale = TRUE,  do.center = TRUE,  scale.max = 10,  block.size = 1000,  min.cells.to.block = 3000,  verbose = TRUE)
+
+all.genes <- rownames(Tail_LB)
+
+Tail_LB = ScaleData(  Tail_LB, features = all.genes ,vars.to.regress = c("nCount_RNA","nFeature_RNA","percent.mt","S.Score", "G2M.Score"))
+
+#run PCA on all genes
+#RunPCA(object, assay = NULL, features = NULL,  npcs = 50, rev.pca = FALSE, weight.by.var = TRUE, verbose = TRUE,  ndims.print = 1:5, nfeatures.print = 30, reduction.name = "pca",  reduction.key = "PC_", seed.use = 42)
+
+Tail_LB = RunPCA(Tail_LB,features = all.genes,npcs = 100)
+
+#plot PCA heatmaps
+#DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+
+library(RColorBrewer)
+
+pdf("Tail_LB_PCAheatmaps.pdf",width=30,height=20)
+DimHeatmap(Tail_LB, dims = 1:16, cells = 100, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Tail_LB, dims = 17:32, cells = 100, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Tail_LB, dims = 33:48, cells = 100, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Tail_LB, dims = 49:64, cells = 100, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Tail_LB, dims = 65:80, cells = 100, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Tail_LB, dims = 81:96, cells = 100, balanced = TRUE,  ncol = 4, fast = F) 
+dev.off()
+
+#elbow plot
+pdf("Tail_LB_PCelbow.pdf",width=20,height=10)
+ElbowPlot(Tail_LB, ndims = 100)
+dev.off()
+
+#Cluster cells
+Tail_LB<- FindNeighbors(Tail_LB, dims = 1:30)
+Tail_LB <- FindClusters(Tail_LB, resolution = 0.8)
+
+#run UMAP
+Tail_LB = RunUMAP(Tail_LB,dims = 1:30,min.dist = 0.003)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Tail_LB_UMAP_PC30_res0.8.pdf",width=5,height=5)
+DimPlot(object = Tail_LB, reduction = 'umap', pt.size = 2)
+DimPlot(object = Tail_LB, reduction = 'umap', pt.size = 2,group.by = "Stage", cols = brewer.pal(9,"Greens")[c(4,6,8)])
+dev.off()
+
+pdf("Tail_LB_UMAP_feature.pdf",width=8,height=10)
+FeaturePlot(Tail_LB, pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA","percent.mt","mCherry","eGFP"),order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]) )
+dev.off()
+
+saveRDS(Tail_LB, file = "Tail_LB_CPM_SeuratObj.RDS")
+Tail_LB = readRDS("Tail_LB_CPM_SeuratObj.RDS")
+
+plot <- DimPlot(object = Tail_LB, reduction = 'umap')
+select.cells <- CellSelector(plot = plot)
+
+Idents(object = Tail_LB, cells = select.cells) <- 3
+
+saveRDS(Tail_LB, file = "Tail_LB_CPM_SeuratObj.RDS")
+Tail_LB = readRDS("Tail_LB_CPM_SeuratObj.RDS")
+
+pdf("Tail_LB_UMAP_PC30_res0.8_manClust.pdf",width=5,height=5)
+DimPlot(object = Tail_LB, reduction = 'umap', pt.size = 2)
+DimPlot(object = Tail_LB, reduction = 'umap', pt.size = 2,group.by = "Stage", cols = brewer.pal(9,"Greens")[c(4,6,8)])
+dev.off()
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Tail_LB, only.pos = TRUE,  logfc.threshold = 0.5)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno, by.x="gene" , by.y="V1")
+markers.anno$ID = markers.anno$gene
+
+#markers.anno = markers.anno[order(as.numeric(markers.anno$cluster)),]
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,"Tail_LB_allMarker.csv")
+
+saveRDS(Tail_LB, file = "Tail_LB_CPM_SeuratObj.RDS")
+```
+
+
+```{r}
+#plot markers
+
+library(RColorBrewer)
+
+
+
+gene_ids = c("AMEX60DD030142",
+"AMEX60DD051448",
+"AMEX60DD014649",
+"AMEX60DD005046",
+"AMEX60DD055474",
+"AMEX60DD045469",
+"AMEX60DD029507",
+"AMEX60DD029508",
+"AMEX60DD001640",
+"AMEX60DD021953",
+"AMEX60DD007586",
+"AMEX60DD022398",
+"AMEX60DD035469",
+"AMEX60DD018450",
+"AMEX60DD029436",
+"AMEX60DD002967",
+"AMEX60DD046676",
+"AMEX60DD028372",
+"AMEX60DD038386",
+"AMEX60DD002799",
+"AMEX60DD010209",
+"AMEX60DD052549",
+"AMEX60DD034707",
+"AMEX60DD007584",
+"AMEX60DD033105",
+"AMEX60DD025287",
+"AMEX60DD025597",
+"AMEX60DD005922",
+"AMEX60DD051859")
+gene_names =c("CDX1-CDX2",
+"HES3",
+"BMP2",
+"FGF3",
+"GBX2",
+"FGF20",
+"HOXC12",
+"HOXC13",
+"SOX2",
+"HOXA13",
+"LUM",
+"COL1A2",
+"PAX1",
+"PRRX1",
+"TWIST3",
+"NKX3-1",
+"LBX2-LBX1",
+"TBX6",
+"FOXC1",
+"FGF17",
+"SP6",
+"DKK1",
+"RSPO3",
+"EPYC",
+"MATN3",
+"MACROD1",
+"CAV2",
+"COL8A2",
+"MYOZ1")
+	
+
+gg_Fig <- FeaturePlot(Tail_LB, pt.size = 0.5, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_UMAP_feature_ClustMarker.pdf",width=15,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+gene_ids = c("AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD021249","AMEX60DD027155","AMEX60DD009987","AMEX60DD022442","AMEX60DD040818","AMEX60DD037674","AMEX60DD052322","AMEX60DD007644","AMEX60DD055512","AMEX60DD029436","AMEX60DD031236","AMEX60DD002658","AMEX60DD036008","AMEX60DD004178","AMEX60DD048972","AMEX60DD029426")
+	
+gene_names =c("PRRX1","RSPO3","FGF8","TBX18","UNCX","TCF15","MEOX1","MEOX2","SCX","TNMD","PAX7","MYF5","TWIST2","TWIST3","SOX9","OTOS","PKDCC","ACAN","CNMD","COL2A1")
+
+
+gg_Fig <- FeaturePlot(Tail_LB, pt.size = 0.3, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_UMAP_feature_ManualMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+
+
+#Paper marker
+gene_names =c("SOX2","FGF8","TBXT","TBX6","HES7","RSPO3","DLL1","MESP2","RIPPLY2","CER1","ALDH1A2","MEOX1","TCF15","PAX7","PAX1","PAX6","SNORC","C4ORF54","FGF14","MYOZ1","SOX6")
+gene_ids = c("AMEX60DD001640","AMEX60DD052891","AMEX60DD034944","AMEX60DD028372","AMEX60DD013332","AMEX60DD034707","AMEX60DD034517","AMEX60DD004139","AMEX60DD029640","AMEX60DD043467","AMEX60DD004101","AMEX60DD009987","AMEX60DD027155","AMEX60DD052322","AMEX60DD035469","AMEX60DD004905","AMEX60DD002622","AMEX60DD044282","AMEX60DD048162","AMEX60DD051859","AMEX60DD004724")
+
+Idents(Tail_LB) <- factor(x = Idents(Tail_LB), levels = c(3,1,0,2))
+
+pdf("Tail_LB_UMAP_Heatmap_TLSMarker.pdf",width=10,height=10)
+DoHeatmap(Tail_LB,features = gene_ids)  + scale_y_discrete(labels = rev(gene_names)) + scale_fill_gradientn( colors = c(rep("white",3),brewer.pal(9,"Blues")[1:9]))
+dev.off()
+
+
+gg_Fig <- FeaturePlot(Tail_LB, pt.size = 0.3, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_UMAP_feature_TLSMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+```
+
+#Stage 28
+
+```{r}
+
+#Load libraries
+
+library(Seurat)
+library(dplyr)
+library(Matrix)
+library(RColorBrewer)
+
+```
+
+
+```{r}
+
+setwd("/home/tobias_gerber/Projects/SingleCellGroup/Axolotl/EmbryonicTailData_SS2/")
+
+#load annotation file
+
+anno = read.delim("/mnt/SingleCellGenomics/genome_data/10xAxolotlGenome/AnnotationFile_AmexG_v6_chr_unscaffolded_CherryGFP_v1.1.csv",sep = "\t",header = F)
+rownames(anno) = anno[,1]
+
+
+############# remove weird transposon / unannotated genes
+unannotated.transcripts = rownames(anno)[anno$V2 %in% anno$V2[grep("PEG10",anno$V2)] ]
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("L1TD1",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("RTL",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("GIN1",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("L1\\-RT",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("^N\\/A",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("^AMEX",anno$V2)] ], unannotated.transcripts))
+
+anno = anno[!rownames(anno) %in% unannotated.transcripts,]
+
+
+############# remove rp genes
+
+rp.genes_AmexG = rownames(anno)[anno$V2 %in% anno$V2[grep("RPL",anno$V2)]]
+rp.genes_AmexG = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("RPS",anno$V2)] ], rp.genes_AmexG))
+
+anno = anno[!rownames(anno) %in% rp.genes_AmexG,]
+
+
+library(tidyverse)
+
+############# get data and remove genes
+
+library(dplyr)
+library(Seurat)
+
+Tail_LB_st28 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/Axolotl/EmbryonicTailData_SmartSeq2/merged_bam_files/fastqFiles/Solo.out/Gene/raw")
+
+Tail_LB_st28 = Tail_LB_st28[rownames(anno), ,drop = FALSE]
+
+############# load in Seurat
+
+Tail_LB_st28 <- CreateSeuratObject(counts = Tail_LB_st28, project = "Tail_LB_st28", min.cells = 2, min.features = 100)
+Tail_LB_st28
+
+############ add meta data
+
+Tail_LB_st28@meta.data$Stage =  "28"
+
+
+
+
+```
+
+```{r}
+mito.genes <- c("ND2","ND1","ND3","ND4","ND4L","ND5","ND6")
+mito.contig <- intersect(c(rownames(anno)[anno$V2 %in% mito.genes ] , rownames(anno)[anno$V2 %in% anno$V2[grep("^COX",anno$V2)]] ) , rownames(Tail_LB_st28))
+
+
+Tail_LB_st28[["percent.mt"]] <- PercentageFeatureSet(Tail_LB_st28, features = mito.contig)
+
+
+plot1 <- FeatureScatter(Tail_LB_st28, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Tail_LB_st28, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+
+pdf("./Tail_LB_st28_QC_PreFilter.pdf",width=10,height=5)
+VlnPlot(Tail_LB_st28, features = c("nCount_RNA","nFeature_RNA","percent.mt"),pt.size = -1)
+CombinePlots(plots = list(plot1, plot2))
+dev.off()
+
+Tail_LB_st28 <- subset(Tail_LB_st28, subset = nCount_RNA < 75000  & nCount_RNA > 5000  & percent.mt < 50 )
+
+plot1 <- FeatureScatter(Tail_LB_st28, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Tail_LB_st28, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+
+pdf("./Tail_LB_st28_QC_PostFilter.pdf",width=10,height=5)
+VlnPlot(Tail_LB_st28, features = c("nCount_RNA","nFeature_RNA","percent.mt"),pt.size = -1)
+CombinePlots(plots = list(plot1, plot2))
+dev.off()
+
+
+#parallize scaling
+library(future)
+plan("multiprocess", workers = 8)
+plan()
+
+#set maximum to 50GB for each worker
+options(future.globals.maxSize = 50000 * 1024^2)
+
+#normalize data
+
+Tail_LB_st28 = NormalizeData(Tail_LB_st28,normalization.method = "RC", scale.factor = 1e6)
+
+tmp = log2(Tail_LB_st28[["RNA"]]@data + 1)
+tmp <- as(tmp, "dgCMatrix")
+
+Tail_LB_st28[["RNA"]]@data = tmp
+
+
+#get cell cycle genes
+
+g2m.genes <- cc.genes$g2m.genes
+g2m.contig <- intersect(rownames(anno)[anno$V2 %in% g2m.genes ] , rownames(Tail_LB_st28) )
+
+s.genes <- cc.genes$s.genes
+s.contig <- intersect(rownames(anno)[anno$V2 %in% s.genes ] , rownames(Tail_LB_st28) )
+
+#cell cycle scoring
+Tail_LB_st28 <- CellCycleScoring(Tail_LB_st28, s.features = s.contig, g2m.features = g2m.contig, set.ident = TRUE)
+
+
+#scale
+#ScaleData(  object,  features = NULL,  assay = NULL,  vars.to.regress = NULL,  split.by = NULL,  model.use = "linear",  use.umi = FALSE,  do.scale = TRUE,  do.center = TRUE,  scale.max = 10,  block.size = 1000,  min.cells.to.block = 3000,  verbose = TRUE)
+
+all.genes <- rownames(Tail_LB_st28)
+
+Tail_LB_st28 = ScaleData(  Tail_LB_st28, features = all.genes ,vars.to.regress = c("nCount_RNA","nFeature_RNA","percent.mt","S.Score", "G2M.Score"))
+
+#run PCA on all genes
+#RunPCA(object, assay = NULL, features = NULL,  npcs = 50, rev.pca = FALSE, weight.by.var = TRUE, verbose = TRUE,  ndims.print = 1:5, nfeatures.print = 30, reduction.name = "pca",  reduction.key = "PC_", seed.use = 42)
+
+Tail_LB_st28 = RunPCA(Tail_LB_st28,features = all.genes,npcs = 50)
+
+#plot PCA heatmaps
+#DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+
+library(RColorBrewer)
+
+pdf("Tail_LB_st28_PCAheatmaps.pdf",width=30,height=20)
+DimHeatmap(Tail_LB, dims = 1:16, cells = 100, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Tail_LB, dims = 17:32, cells = 100, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Tail_LB, dims = 33:48, cells = 100, balanced = TRUE,  ncol = 4, fast = F) 
+dev.off()
+
+#elbow plot
+pdf("Tail_LB_st28_PCelbow.pdf",width=20,height=10)
+ElbowPlot(Tail_LB_st28, ndims = 50)
+dev.off()
+
+#Cluster cells
+Tail_LB_st28<- FindNeighbors(Tail_LB_st28, dims = 1:5)
+Tail_LB_st28 <- FindClusters(Tail_LB_st28, resolution = 1.1)
+
+#run UMAP
+Tail_LB_st28 = RunUMAP(Tail_LB_st28,dims = 1:5,min.dist = 0.003)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Tail_LB_st28_UMAP_PC5_res1.1.pdf",width=5,height=5)
+DimPlot(object = Tail_LB_st28, reduction = 'umap', pt.size = 2)
+DimPlot(object = Tail_LB_st28, reduction = 'umap', pt.size = 2,group.by = "Stage", cols = brewer.pal(9,"Greens")[c(4,6,8)])
+dev.off()
+
+pdf("Tail_LB_st28_UMAP_feature.pdf",width=8,height=10)
+FeaturePlot(Tail_LB_st28, pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA","percent.mt"),order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]) )
+dev.off()
+
+saveRDS(Tail_LB_st28, file = "Tail_LB_st28_CPM_SeuratObj.RDS")
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Tail_LB_st28, only.pos = TRUE,  logfc.threshold = 0.5)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno, by.x="gene" , by.y="V1")
+markers.anno$ID = markers.anno$gene
+
+#markers.anno = markers.anno[order(as.numeric(markers.anno$cluster)),]
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,"Tail_LB_st28_allMarker.csv")
+
+```
+
+
+```{r}
+#plot markers
+
+library(RColorBrewer)
+
+ 
+
+gene_ids = c("AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD021249","AMEX60DD027155","AMEX60DD009987","AMEX60DD040818","AMEX60DD052322","AMEX60DD007644","AMEX60DD002658","AMEX60DD048972","AMEX60DD029426")
+	
+gene_names =c("PRRX1","RSPO3","FGF8","TBX18","UNCX","TCF15","MEOX1","SCX","PAX7","MYF5","OTOS","CNMD","COL2A1")
+
+
+gg_Fig <- FeaturePlot(Tail_LB_st28, pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_st28_UMAP_feature_ManualMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+
+
+#Paper marker
+gene_names =c("SOX2","FGF8","TBXT","TBX6","HES7","RSPO3","DLL1","MESP2","RIPPLY2","CER1","ALDH1A2","MEOX1","TCF15","PAX7","PAX6","SNORC","C4ORF54","FGF14","SOX6")
+gene_ids = c("AMEX60DD001640","AMEX60DD052891","AMEX60DD034944","AMEX60DD028372","AMEX60DD013332","AMEX60DD034707","AMEX60DD034517","AMEX60DD004139","AMEX60DD029640","AMEX60DD043467","AMEX60DD004101","AMEX60DD009987","AMEX60DD027155","AMEX60DD052322","AMEX60DD004905","AMEX60DD002622","AMEX60DD044282","AMEX60DD048162","AMEX60DD004724")
+
+#Idents(Tail_LB_st28) <- factor(x = Idents(Tail_LB_st28), levels = c(3,1,0,2))
+
+pdf("Tail_LB_st28_UMAP_Heatmap_TLSMarker.pdf",width=10,height=10)
+DoHeatmap(Tail_LB_st28,features = gene_ids)  + scale_y_discrete(labels = rev(gene_names)) + scale_fill_gradientn( colors = c(rep("white",3),brewer.pal(9,"Blues")[1:9]))
+dev.off()
+
+
+gg_Fig <- FeaturePlot(Tail_LB_st28, pt.size = 0.3, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_st28_UMAP_feature_TLSMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+```
+
+
+#Combine embryonic time points
+
+```{r}
+#parallize scaling
+library(future)
+plan("multiprocess", workers = 8)
+plan()
+
+setwd("/home/tobias_gerber/Projects/SingleCellGroup/Axolotl/EmbryonicTailData_SS2/")
+
+Tail_LB_st28 = readRDS(file = "Tail_LB_st28_CPM_SeuratObj.RDS")
+
+Tail_LB = readRDS(file = "Tail_LB_CPM_SeuratObj.RDS")
+
+
+
+#parallize scaling
+library(future)
+plan("multiprocess", workers = 8)
+plan()
+
+Tail_LB_int = merge(Tail_LB, Tail_LB_st28, add.cell.ids = c("st25-35","st28"), project = "Tail_LB_int")
+
+Tail_LB_int <- ScaleData(Tail_LB_int, features = rownames(Tail_LB_int),verbose = FALSE)
+
+Tail_LB_int <- FindVariableFeatures(Tail_LB_int, selection.method = "vst", nfeatures = 2000)
+Tail_LB_int <- RunPCA(Tail_LB_int, npcs = 30,features = VariableFeatures(object = Tail_LB_int), verbose = FALSE)
+
+Tail_LB_int = RunHarmony(object=Tail_LB_int, group.by.vars = "orig.ident", assay.use = "RNA", dims.use = 1:30)
+
+#Cluster cells
+Tail_LB_int<- FindNeighbors(Tail_LB_int, dims = 1:30, reduction = "harmony")
+Tail_LB_int <- FindClusters(Tail_LB_int, resolution = 0.6)
+
+Tail_LB_int <- RunUMAP(Tail_LB_int, reduction = "harmony", dims = 1:30, min.dist = 0.3,seed.use = 15)
+
+
+pdf("Tail_LB_int_Embedding_PC30_res0.6.pdf",width=10,height=10)
+DimPlot(object = Tail_LB_int, reduction = 'umap', pt.size = 2)
+DimPlot(object = Tail_LB_int, reduction = 'umap', pt.size = 2,group.by = "Stage")
+dev.off()
+
+
+saveRDS(Tail_LB_int, file = "Tail_LB_int_CPM_SeuratObj.RDS")
+
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Tail_LB_int, only.pos = TRUE,  logfc.threshold = 0.5)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno, by.x="gene" , by.y="V1")
+markers.anno$ID = markers.anno$gene
+
+#markers.anno = markers.anno[order(as.numeric(markers.anno$cluster)),]
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,"Tail_LB_int_allMarker.csv")
+
+
+
+#Paper marker
+gene_names =c("SOX2","FGF8","TBXT","TBX6","HES7","RSPO3","DLL1","MESP2","RIPPLY2","CER1","ALDH1A2","MEOX1","TCF15","PAX7","PAX1","PAX6","SNORC","C4ORF54","FGF14","MYOZ1","SOX6","FABP1","GATA5","SST","WNT8B","PRRX2","SOX10","TYR","MLANA","SOX17")
+gene_ids = c("AMEX60DD001640","AMEX60DD052891","AMEX60DD034944","AMEX60DD028372","AMEX60DD013332","AMEX60DD034707","AMEX60DD034517","AMEX60DD004139","AMEX60DD029640","AMEX60DD043467","AMEX60DD004101","AMEX60DD009987","AMEX60DD027155","AMEX60DD052322","AMEX60DD035469","AMEX60DD004905","AMEX60DD002622","AMEX60DD044282","AMEX60DD048162","AMEX60DD051859","AMEX60DD004724","AMEX60DD046133","AMEX60DD026945","AMEX60DD003175","AMEX60DD051636","AMEX60DD029302","AMEX60DD049620","AMEX60DD043443","AMEX60DD050342","AMEX60DD039720")
+
+
+
+
+
+#Idents(Tail_LB_int) <- factor(x = Idents(Tail_LB_int), levels = c(3,1,0,2))
+
+pdf("Tail_LB_int_UMAP_Heatmap_TLSMarker.pdf",width=10,height=10)
+DoHeatmap(Tail_LB_int,features = gene_ids)  + scale_y_discrete(labels = rev(gene_names)) + scale_fill_gradientn( colors = c(rep("white",3),brewer.pal(9,"Blues")[1:9]))
+dev.off()
+
+
+gg_Fig <- FeaturePlot(Tail_LB_int, pt.size = 0.3, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_int_UMAP_feature_TLSMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+	
+
+
+gene_ids = c("AMEX60DD021181","AMEX60DD021249","AMEX60DD051586","AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD027155","AMEX60DD009987","AMEX60DD022442","AMEX60DD040818","AMEX60DD037674","AMEX60DD007644","AMEX60DD052322","AMEX60DD055512","AMEX60DD029436","AMEX60DD054625","AMEX60DD007033","AMEX60DD018705","AMEX60DD024616","AMEX60DD038300","AMEX60DD012132","AMEX60DD031236","AMEX60DD002658","AMEX60DD037123","AMEX60DD036008","AMEX60DD004178","AMEX60DD048972","AMEX60DD029426","AMEX60DD005459","AMEX60DD043904","AMEX60DD049488","AMEX60DD033105","AMEX60DD038318","AMEX60DD031842","AMEX60DD047873","AMEX60DD034687","AMEX60DD008143","AMEX60DD048840")
+gene_names =c("LFNG","UNCX","HES5","PRRX1","RSPO3","FGF8","TBX18","TCF15","MEOX1","MEOX2","SCX","TNMD","MYF5","PAX7","TWIST2","TWIST3","TBX2","FAM180A","F13B","LTBP4","F13A1","GREM1","SOX9","OTOS","CHRDL1","PKDCC","ACAN","CNMD","COL2A1","MATN1","SPP1","MMP13","MATN3","DSP","COL5A3","COL4A1","LAMA2","ITIH5","KLF5")
+	
+
+gene_ids = c("AMEX60DD001640","AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD021249","AMEX60DD027155","AMEX60DD009987","AMEX60DD022442","AMEX60DD040818","AMEX60DD037674","AMEX60DD052322","AMEX60DD007644","AMEX60DD055512","AMEX60DD029436","AMEX60DD031236","AMEX60DD002658","AMEX60DD036008","AMEX60DD004178","AMEX60DD048972","AMEX60DD029426")
+	
+gene_names =c("SOX2","PRRX1","RSPO3","FGF8","TBX18","UNCX","TCF15","MEOX1","MEOX2","SCX","TNMD","PAX7","MYF5","TWIST2","TWIST3","SOX9","OTOS","PKDCC","ACAN","CNMD","COL2A1")
+
+
+gg_Fig <- FeaturePlot(Tail_LB_int, pt.size = 0.3, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_int_UMAP_feature_ManualMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+
+# some potential endoderm cells are identified --> remove
+
+
+Tail_LB_int  = subset(Tail_LB_int, idents = c(0,1,2,3))
+
+Tail_LB_int <- FindVariableFeatures(Tail_LB_int, selection.method = "vst", nfeatures = 2000)
+Tail_LB_int <- RunPCA(Tail_LB_int, npcs = 30,features = VariableFeatures(object = Tail_LB_int), verbose = FALSE)
+
+Tail_LB_int = RunHarmony(object=Tail_LB_int, group.by.vars = "orig.ident", assay.use = "RNA", dims.use = 1:30)
+
+#Cluster cells
+Tail_LB_int<- FindNeighbors(Tail_LB_int, dims = 1:30, reduction = "harmony")
+Tail_LB_int <- FindClusters(Tail_LB_int, resolution = 0.8)
+
+Tail_LB_int <- RunUMAP(Tail_LB_int, reduction = "harmony", dims = 1:30, min.dist = 0.3,seed.use = 40)
+
+
+pdf("Tail_LB_int_clean_Embedding_PC30_res0.8.pdf",width=10,height=10)
+DimPlot(object = Tail_LB_int, reduction = 'umap', pt.size = 2)
+DimPlot(object = Tail_LB_int, reduction = 'umap', pt.size = 2,group.by = "Stage")
+dev.off()
+
+
+saveRDS(Tail_LB_int, file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+Tail_LB_int = readRDS(file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+
+plot <- DimPlot(object = Tail_LB_int, reduction = 'umap')
+select.cells <- CellSelector(plot = plot)
+
+Idents(object = Tail_LB_int, cells = select.cells) <- 4
+
+saveRDS(Tail_LB_int, file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+Tail_LB_int = readRDS("Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+#Paper marker
+gene_names =c("SOX2","FGF8","TBXT","TBX6","HES7","RSPO3","DLL1","MESP2","RIPPLY2","CER1","ALDH1A2","MEOX1","TCF15","PAX7","PAX1","PAX6","SNORC","C4ORF54","FGF14","MYOZ1","SOX6","PRRX2","SOX10","TYR","MLANA")
+gene_ids = c("AMEX60DD001640","AMEX60DD052891","AMEX60DD034944","AMEX60DD028372","AMEX60DD013332","AMEX60DD034707","AMEX60DD034517","AMEX60DD004139","AMEX60DD029640","AMEX60DD043467","AMEX60DD004101","AMEX60DD009987","AMEX60DD027155","AMEX60DD052322","AMEX60DD035469","AMEX60DD004905","AMEX60DD002622","AMEX60DD044282","AMEX60DD048162","AMEX60DD051859","AMEX60DD004724","AMEX60DD029302","AMEX60DD049620","AMEX60DD043443","AMEX60DD050342")
+
+saveRDS(Tail_LB_int, file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+# Melanocytes identified --> remove
+
+
+Tail_LB_int  = subset(Tail_LB_int, idents = c(0,1,2,3))
+
+Tail_LB_int <- FindVariableFeatures(Tail_LB_int, selection.method = "vst", nfeatures = 2000)
+Tail_LB_int <- RunPCA(Tail_LB_int, npcs = 30,features = VariableFeatures(object = Tail_LB_int), verbose = FALSE)
+
+Tail_LB_int = RunHarmony(object=Tail_LB_int, group.by.vars = "orig.ident", assay.use = "RNA", dims.use = 1:30)
+
+#Cluster cells
+Tail_LB_int<- FindNeighbors(Tail_LB_int, dims = 1:30, reduction = "harmony")
+Tail_LB_int <- FindClusters(Tail_LB_int, resolution = 0.8)
+
+Tail_LB_int <- RunUMAP(Tail_LB_int, reduction = "harmony", dims = 1:30, min.dist = 0.3,seed.use = 40)
+
+
+pdf("Tail_LB_int_clean_Embedding_PC30_res0.8.pdf",width=10,height=10)
+DimPlot(object = Tail_LB_int, reduction = 'umap', pt.size = 2)
+DimPlot(object = Tail_LB_int, reduction = 'umap', pt.size = 2,group.by = "Stage")
+dev.off()
+
+
+
+Idents(Tail_LB_int) <- factor(x = Idents(Tail_LB_int), levels = c(4,0,1,2,3))
+
+gene_names =c("SOX2","FGF8","TBXT","TBX6","HES7","RSPO3","DLL1","MESP2","RIPPLY2","CER1","ALDH1A2","MEOX1","TCF15","PAX7","PAX1","PAX6","SNORC","C4ORF54","FGF14","MYOZ1","SOX6")
+gene_ids = c("AMEX60DD001640","AMEX60DD052891","AMEX60DD034944","AMEX60DD028372","AMEX60DD013332","AMEX60DD034707","AMEX60DD034517","AMEX60DD004139","AMEX60DD029640","AMEX60DD043467","AMEX60DD004101","AMEX60DD009987","AMEX60DD027155","AMEX60DD052322","AMEX60DD035469","AMEX60DD004905","AMEX60DD002622","AMEX60DD044282","AMEX60DD048162","AMEX60DD051859","AMEX60DD004724")
+
+
+pdf("Tail_LB_int_clean_UMAP_Heatmap_TLSMarker.pdf",width=10,height=10)
+DoHeatmap(Tail_LB_int,features = gene_ids)  + scale_y_discrete(labels = rev(gene_names)) + scale_fill_gradientn( colors = c(rep("white",3),brewer.pal(9,"Blues")[1:9]))
+dev.off()
+
+
+gg_Fig <- FeaturePlot(Tail_LB_int, pt.size = 0.3, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_int_clean_UMAP_feature_TLSMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+
+gene_ids = c("AMEX60DD001640","AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD021249","AMEX60DD027155","AMEX60DD009987","AMEX60DD022442","AMEX60DD040818","AMEX60DD037674","AMEX60DD052322","AMEX60DD007644","AMEX60DD055512","AMEX60DD029436","AMEX60DD031236","AMEX60DD002658","AMEX60DD036008","AMEX60DD004178","AMEX60DD048972","AMEX60DD029426")
+	
+gene_names =c("SOX2","PRRX1","RSPO3","FGF8","TBX18","UNCX","TCF15","MEOX1","MEOX2","SCX","TNMD","PAX7","MYF5","TWIST2","TWIST3","SOX9","OTOS","PKDCC","ACAN","CNMD","COL2A1")
+
+
+gg_Fig <- FeaturePlot(Tail_LB_int, pt.size = 0.3, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_int_clean_UMAP_feature_ManualMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+# one stage 30 cluster looks neuronal like with Pax6 and sox2 positive cells
+
+saveRDS(Tail_LB_int, file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+Tail_LB_int = readRDS(file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+
+plot <- DimPlot(object = Tail_LB_int, reduction = 'umap')
+select.cells <- CellSelector(plot = plot)
+
+Idents(object = Tail_LB_int, cells = select.cells) <- 5
+
+saveRDS(Tail_LB_int, file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+Tail_LB_int = readRDS("Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+
+Tail_LB_int  = subset(Tail_LB_int, idents = c(0,1,2,3,4))
+
+Tail_LB_int <- FindVariableFeatures(Tail_LB_int, selection.method = "vst", nfeatures = 2000)
+Tail_LB_int <- RunPCA(Tail_LB_int, npcs = 30,features = VariableFeatures(object = Tail_LB_int), verbose = FALSE)
+
+Tail_LB_int = RunHarmony(object=Tail_LB_int, group.by.vars = "orig.ident", assay.use = "RNA", dims.use = 1:30)
+
+#Cluster cells
+Tail_LB_int<- FindNeighbors(Tail_LB_int, dims = 1:10, reduction = "harmony")
+Tail_LB_int <- FindClusters(Tail_LB_int, resolution = 0.8)
+
+Tail_LB_int <- RunUMAP(Tail_LB_int, reduction = "harmony", dims = 1:10, min.dist = 0.3,seed.use = 40)
+
+
+pdf("Tail_LB_int_clean_Embedding_PC10_res0.8.pdf",width=10,height=10)
+DimPlot(object = Tail_LB_int, reduction = 'umap', pt.size = 2)
+DimPlot(object = Tail_LB_int, reduction = 'umap', pt.size = 2,group.by = "Stage")
+dev.off()
+
+
+
+Idents(Tail_LB_int) <- factor(x = Idents(Tail_LB_int), levels = c(2,1,0,3))
+
+gene_names =c("SOX2","FGF8","TBXT","TBX6","HES7","RSPO3","DLL1","MESP2","RIPPLY2","CER1","ALDH1A2","MEOX1","TCF15","PAX7","PAX1","PAX6","SNORC","C4ORF54","FGF14","MYOZ1","SOX6")
+gene_ids = c("AMEX60DD001640","AMEX60DD052891","AMEX60DD034944","AMEX60DD028372","AMEX60DD013332","AMEX60DD034707","AMEX60DD034517","AMEX60DD004139","AMEX60DD029640","AMEX60DD043467","AMEX60DD004101","AMEX60DD009987","AMEX60DD027155","AMEX60DD052322","AMEX60DD035469","AMEX60DD004905","AMEX60DD002622","AMEX60DD044282","AMEX60DD048162","AMEX60DD051859","AMEX60DD004724")
+
+
+pdf("Tail_LB_int_clean_UMAP_Heatmap_TLSMarker.pdf",width=10,height=10)
+DoHeatmap(Tail_LB_int,features = gene_ids)  + scale_y_discrete(labels = rev(gene_names)) + scale_fill_gradientn( colors = c(rep("white",3),brewer.pal(9,"Blues")[1:9]))
+dev.off()
+
+
+gg_Fig <- FeaturePlot(Tail_LB_int, pt.size = 0.3, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_int_clean_UMAP_feature_TLSMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+	
+
+
+gene_ids = c("AMEX60DD001640","AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD021249","AMEX60DD027155","AMEX60DD009987","AMEX60DD022442","AMEX60DD040818","AMEX60DD037674","AMEX60DD052322","AMEX60DD007644","AMEX60DD055512","AMEX60DD029436","AMEX60DD031236","AMEX60DD002658","AMEX60DD036008","AMEX60DD004178","AMEX60DD048972","AMEX60DD029426","AMEX60DD051448","AMEX60DD046291")
+	
+gene_names =c("SOX2","PRRX1","RSPO3","FGF8","TBX18","UNCX","TCF15","MEOX1","MEOX2","SCX","TNMD","PAX7","MYF5","TWIST2","TWIST3","SOX9","OTOS","PKDCC","ACAN","CNMD","COL2A1","HES3","EMX2")
+
+
+gg_Fig <- FeaturePlot(Tail_LB_int, pt.size = 0.3, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_int_clean_UMAP_feature_ManualMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+
+saveRDS(Tail_LB_int, file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+
+# one stage 30 cluster looks neuronal like with Pax6 and sox2 positive cells
+
+saveRDS(Tail_LB_int, file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+Tail_LB_int = readRDS(file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+
+plot <- DimPlot(object = Tail_LB_int, reduction = 'umap')
+select.cells <- CellSelector(plot = plot)
+
+Idents(object = Tail_LB_int, cells = select.cells) <- 4
+
+saveRDS(Tail_LB_int, file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+Tail_LB_int = readRDS("Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+
+Tail_LB_int  = subset(Tail_LB_int, idents = c(0,1,2,3))
+
+Tail_LB_int <- FindVariableFeatures(Tail_LB_int, selection.method = "vst", nfeatures = 2000)
+Tail_LB_int <- RunPCA(Tail_LB_int, npcs = 30,features = VariableFeatures(object = Tail_LB_int), verbose = FALSE)
+
+Tail_LB_int = RunHarmony(object=Tail_LB_int, group.by.vars = "orig.ident", assay.use = "RNA", dims.use = 1:30)
+
+#Cluster cells
+Tail_LB_int<- FindNeighbors(Tail_LB_int, dims = 1:15, reduction = "harmony")
+Tail_LB_int <- FindClusters(Tail_LB_int, resolution = 0.8)
+
+Tail_LB_int <- RunUMAP(Tail_LB_int, reduction = "harmony", dims = 1:15, min.dist = 1,seed.use = 30)
+
+
+pdf("Tail_LB_int_clean_Embedding_PC15_res0.8.pdf",width=10,height=10)
+DimPlot(object = Tail_LB_int, reduction = 'umap', pt.size = 2)
+DimPlot(object = Tail_LB_int, reduction = 'umap', pt.size = 2,group.by = "Stage")
+dev.off()
+
+
+saveRDS(Tail_LB_int, file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Tail_LB_int, only.pos = TRUE,  logfc.threshold = 0.5)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno, by.x="gene" , by.y="V1")
+markers.anno$ID = markers.anno$gene
+
+#markers.anno = markers.anno[order(as.numeric(markers.anno$cluster)),]
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,"Tail_LB_int_clean_allMarker.csv")
+
+
+Idents(Tail_LB_int) <- factor(x = Idents(Tail_LB_int), levels = c(1,2,0,3))
+
+gene_names =c("SOX2","FGF8","TBXT","TBX6","HES7","RSPO3","DLL1","MESP2","RIPPLY2","CER1","MEOX1","TCF15","ALDH1A2","PAX7","PAX1","SNORC","C4ORF54","FGF14","MYOZ1","SOX6")
+gene_ids = c("AMEX60DD001640","AMEX60DD052891","AMEX60DD034944","AMEX60DD028372","AMEX60DD013332","AMEX60DD034707","AMEX60DD034517","AMEX60DD004139","AMEX60DD029640","AMEX60DD043467","AMEX60DD009987","AMEX60DD027155","AMEX60DD004101","AMEX60DD052322","AMEX60DD035469","AMEX60DD002622","AMEX60DD044282","AMEX60DD048162","AMEX60DD051859","AMEX60DD004724")
+
+
+pdf("Tail_LB_int_clean_UMAP_Heatmap_TLSMarker.pdf",width=10,height=10)
+DoHeatmap(Tail_LB_int,features = gene_ids)  + scale_y_discrete(labels = rev(gene_names)) + scale_fill_gradientn( colors = c(rep("white",3),brewer.pal(9,"Blues")[1:9]))
+dev.off()
+
+
+gg_Fig <- FeaturePlot(Tail_LB_int, pt.size = 0.3, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_int_clean_UMAP_feature_TLSMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+	
+
+
+gene_ids = c("AMEX60DD001640","AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD021249","AMEX60DD027155","AMEX60DD009987","AMEX60DD022442","AMEX60DD040818","AMEX60DD037674","AMEX60DD052322","AMEX60DD007644","AMEX60DD055512","AMEX60DD029436","AMEX60DD031236","AMEX60DD002658","AMEX60DD036008","AMEX60DD004178","AMEX60DD048972","AMEX60DD029426","AMEX60DD051448","AMEX60DD046291","AMEX60DD034944","AMEX60DD028372","AMEX60DD013332","AMEX60DD033213","AMEX60DD020503","AMEX60DDU001008266","AMEX60DD056488","AMEX60DD044865")
+	
+gene_names =c("SOX2","PRRX1","RSPO3","FGF8","TBX18","UNCX","TCF15","MEOX1","MEOX2","SCX","TNMD","PAX7","MYF5","TWIST2","TWIST3","SOX9","OTOS","PKDCC","ACAN","CNMD","COL2A1","HES3","EMX2","TBXT","TBX6","HES7","GREB1","WNT3A","CDX2","CDX4","FGF2")
+
+
+gg_Fig <- FeaturePlot(Tail_LB_int, pt.size = 0.3, features = gene_ids,order = T, cols = c("grey",rev(viridis_pal(option = "viridis")(12))), repel=T, min.cutoff = "q5", max.cutoff = "q95") & NoLegend()
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_int_clean_UMAP_feature_ManualMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+
+####Plot some markers as histogram per in silico bulk
+
+plot.df = AverageExpression(
+  Tail_LB_int,
+  features = c(gene_ids),
+  return.seurat = FALSE,
+  group.by = "Stage"
+)
+
+plot.df = melt(plot.df)
+
+pdf("Tail_LB_int_clean_Histogram_feature_ManualMarker.pdf",width=13,height=10)
+ggplot(plot.df, aes(x = Var2 , y = value, color = Var2)) + geom_col() + facet_wrap(.~ Var1, scales = "free")
+dev.off()
+
+```
+
+#Rostral-Caudal patterning
+
+```{r}
+#Extract stage 30 and stage 35 because of more frequent uncx and tbx18 expression
+
+setwd("/home/tobias_gerber/Projects/SingleCellGroup/Axolotl/EmbryonicTailData_SS2/")
+
+Tail_LB_int = readRDS(file = "Tail_LB_int_clean_CPM_SeuratObj.RDS")
+
+Tail_LB_30_35 = subset(Tail_LB_int, subset = Stage %in% c(30,35))
+
+#Cluster cells
+Tail_LB_30_35<- FindNeighbors(Tail_LB_30_35, dims = 1:15, reduction = "harmony")
+Tail_LB_30_35 <- FindClusters(Tail_LB_30_35, resolution = 0.8)
+
+Tail_LB_30_35 <- RunUMAP(Tail_LB_30_35, reduction = "harmony", dims = 1:15, min.dist = 1,seed.use = 30)
+
+
+pdf("Tail_LB_Stage30_35_Embedding_PC15_res0.8.pdf",width=10,height=10)
+DimPlot(object = Tail_LB_30_35, reduction = 'umap', pt.size = 3)
+DimPlot(object = Tail_LB_30_35, reduction = 'umap', pt.size = 3,group.by = "Stage")
+dev.off()
+
+
+gene_ids = c("AMEX60DD001640","AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD021249","AMEX60DD027155","AMEX60DD009987","AMEX60DD022442","AMEX60DD040818","AMEX60DD037674","AMEX60DD052322","AMEX60DD007644","AMEX60DD055512","AMEX60DD029436","AMEX60DD031236","AMEX60DD002658","AMEX60DD036008","AMEX60DD004178","AMEX60DD048972","AMEX60DD029426","AMEX60DD051448","AMEX60DD046291")
+	
+gene_names =c("SOX2","PRRX1","RSPO3","FGF8","TBX18","UNCX","TCF15","MEOX1","MEOX2","SCX","TNMD","PAX7","MYF5","TWIST2","TWIST3","SOX9","OTOS","PKDCC","ACAN","CNMD","COL2A1","HES3","EMX2")
+
+
+gg_Fig <- FeaturePlot(Tail_LB_30_35, pt.size = 1, features = gene_ids,order = T, cols = c("grey",rev(viridis_pal(option = "viridis")(12))), repel=T, min.cutoff = "q10", max.cutoff = "q90") & NoLegend()
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_Stage_30_35_UMAP_feature_ManualMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+##########looks not so promising only stage 35 as it is more divers
+
+#Stage 35 only
+
+Tail_LB_35 = subset(Tail_LB_int, subset = Stage %in% c(35))
+
+
+Tail_LB_35 = RunPCA(Tail_LB_35,features = all.genes,npcs = 20)
+
+#Cluster cells
+Tail_LB_35<- FindNeighbors(Tail_LB_35, dims = 1:10)
+Tail_LB_35 <- FindClusters(Tail_LB_35, resolution = 1)
+
+
+library(tidyverse)
+library(factoextra)
+Data.hc <- Tail_LB_35@reductions$pca@cell.embeddings[,c(1:10)] %>% get_dist(method = "pearson") %>% hclust(method = 'ward.D') ## PCs
+Hcls <- data.frame(Clusters = as.factor(cutree(Data.hc, k = 5)))
+Hcls <- Hcls %>% mutate(Wells = colnames(Tail_LB_35))
+
+Tail_LB_35@meta.data$Hclust = Hcls$Clusters
+
+
+#UMAP
+Tail_LB_35 <- RunUMAP(Tail_LB_35, dims = 1:10, min.dist = 0.01)
+
+
+pdf("Tail_LB_Stage35_Embedding_PC10_res1.pdf",width=5,height=5)
+DimPlot(object = Tail_LB_35, reduction = 'umap', pt.size = 3,group.by = "seurat_clusters")
+DimPlot(object = Tail_LB_35, reduction = 'umap', pt.size = 3,group.by = "Hclust")
+DimPlot(object = Tail_LB_35, reduction = 'umap', pt.size = 3,group.by = "Stage")
+FeaturePlot(Tail_LB_35, pt.size = 2, features = c("nCount_RNA","nFeature_RNA"),order = T) & NoLegend()
+dev.off()
+
+
+gene_ids = c("AMEX60DD001640","AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD021249","AMEX60DD027155","AMEX60DD009987","AMEX60DD022442","AMEX60DD040818","AMEX60DD037674","AMEX60DD052322","AMEX60DD007644","AMEX60DD055512","AMEX60DD029436","AMEX60DD031236","AMEX60DD002658","AMEX60DD036008","AMEX60DD004178","AMEX60DD048972","AMEX60DD029426","AMEX60DD051448","AMEX60DD046291","AMEX60DD005046","AMEX60DD002586","AMEX60DD024370","AMEX60DD034517","AMEX60DD005541","AMEX60DD034565","AMEX60DD014849","AMEX60DD035469")
+	
+gene_names =c("SOX2","PRRX1","RSPO3","FGF8","TBX18","UNCX","TCF15","MEOX1","MEOX2","SCX","TNMD","PAX7","MYF5","TWIST2","TWIST3","SOX9","OTOS","PKDCC","ACAN","CNMD","COL2A1","HES3","EMX2","FGF3","FGFR1","DLL3","DLL1","NEWT-ID3","THBS2","THBS3","PAX1")
+
+
+gg_Fig <- FeaturePlot(Tail_LB_35, pt.size = 1, features = gene_ids,order = T, cols = c("grey",rev(viridis_pal(option = "viridis")(12))), repel=T, min.cutoff = "q10", max.cutoff = "q90") & NoLegend()
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_Stage35_UMAP_feature_ManualMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+gene_names =c("SOX2","FGF8","TBXT","TBX6","HES7","RSPO3","DLL1","MESP2","RIPPLY2","CER1","ALDH1A2","MEOX1","TCF15","PAX7","PAX1","PAX6","SNORC","C4ORF54","FGF14","MYOZ1","SOX6")
+gene_ids = c("AMEX60DD001640","AMEX60DD052891","AMEX60DD034944","AMEX60DD028372","AMEX60DD013332","AMEX60DD034707","AMEX60DD034517","AMEX60DD004139","AMEX60DD029640","AMEX60DD043467","AMEX60DD004101","AMEX60DD009987","AMEX60DD027155","AMEX60DD052322","AMEX60DD035469","AMEX60DD004905","AMEX60DD002622","AMEX60DD044282","AMEX60DD048162","AMEX60DD051859","AMEX60DD004724")
+
+
+gg_Fig <- FeaturePlot(Tail_LB_35, pt.size = 1, features = gene_ids,order = T, cols = c("grey",rev(viridis_pal(option = "viridis")(12))), repel=T, min.cutoff = "q5", max.cutoff = "q95") & NoLegend()
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_Stage35_UMAP_feature_TLSMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+
+
+#Find unbiasedly markers
+
+
+Idents(Tail_LB_35) = Tail_LB_35@meta.data$Hclust
+
+#Find Markers
+markers <- FindAllMarkers(Tail_LB_35, only.pos = TRUE,  logfc.threshold = 0.1)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno, by.x="gene" , by.y="V1")
+markers.anno$ID = markers.anno$gene
+
+#markers.anno = markers.anno[order(as.numeric(markers.anno$cluster)),]
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_log2FC))
+
+write.csv(markers.anno,"Tail_LB_Stage35_Hclust_Marker.csv")
+
+#Plot some cluster 2 and 3 markers as this cluster is not clear to me what it is
+gene_names = c(
+#cluser3
+"SEMA3E",
+"LUM",
+"COL7A1",
+"NGF",
+"ARPC1A",
+"ABI3BP",
+"FAT2",
+"PCDH7",
+"TCAF2",
+"CBFB",
+#cluster 2
+"ARL13B",
+"IL20RA",
+"MAL",
+"MSX1",
+"EREG",
+"RAB37",
+"RERG",
+"GP2",
+"ASS1",
+"EMX2")
+gene_ids = c(
+#cluster3
+"AMEX60DD006238",
+"AMEX60DD007586",
+"AMEX60DD008057",
+"AMEX60DD008715",
+"AMEX60DD031190",
+"AMEX60DD048369",
+"AMEX60DD030102",
+"AMEX60DD045721",
+"AMEX60DD050179",
+"AMEX60DD017820",
+#cluster 2
+"AMEX60DD037758",
+"AMEX60DD034836",
+"AMEX60DD034450",
+"AMEX60DD045885",
+"AMEX60DD044176",
+"AMEX60DD030953",
+"AMEX60DD006649",
+"AMEX60DD005741",
+"AMEX60DD050365",
+"AMEX60DD053236")
+
+
+gg_Fig <- FeaturePlot(Tail_LB_35, pt.size = 1, features = gene_ids,order = T, cols = c("grey",rev(viridis_pal(option = "viridis")(12))), repel=T, min.cutoff = "q1", max.cutoff = "q99") & NoLegend()
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_Stage35_UMAP_feature_Cluster2_3Marker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+	
+#Find Markers that correlate with UNCX and TBX18
+
+norm.data = GetAssayData(object = Tail_LB_35, slot = "data")
+norm.data = as.matrix(norm.data)
+
+#TBX18
+gene<-as.numeric(norm.data["AMEX60DD033766",])
+correlations<-apply(norm.data,1,function(x){cor(gene,x)})
+correlations[is.na(correlations)] = 0
+
+correlations.anno = as.data.frame(correlations)
+correlations.anno$gene = rownames(correlations.anno)
+
+correlations.anno = merge(correlations.anno,anno, by.x="gene" , by.y="V1")
+correlations.anno$ID = correlations.anno$gene
+
+#markers.anno = markers.anno[order(as.numeric(markers.anno$cluster)),]
+correlations.anno = correlations.anno  %>% arrange(desc(correlations))
+
+write.csv(correlations.anno,"Tail_LB_Stage35_TBX18_CorrelationMarker.csv")
+
+#UNCX
+gene<-as.numeric(norm.data["AMEX60DD021249",])
+correlations<-apply(norm.data,1,function(x){cor(gene,x)})
+correlations[is.na(correlations)] = 0
+
+correlations.anno = as.data.frame(correlations)
+correlations.anno$gene = rownames(correlations.anno)
+
+correlations.anno = merge(correlations.anno,anno, by.x="gene" , by.y="V1")
+correlations.anno$ID = correlations.anno$gene
+
+#markers.anno = markers.anno[order(as.numeric(markers.anno$cluster)),]
+correlations.anno = correlations.anno  %>% arrange(desc(correlations))
+
+write.csv(correlations.anno,"Tail_LB_Stage35_UNCX_CorrelationMarker.csv")
+
+
+gene_ids = c("AMEX60DD021249",
+"AMEX60DD003650",
+"AMEX60DD007182",
+"AMEX60DD039974",
+"AMEX60DD003432",
+"AMEX60DD002950",
+"AMEX60DD013814",
+"AMEX60DD013399",
+"AMEX60DD050707",
+"AMEX60DD010938",
+"AMEX60DD033766",
+"AMEX60DD026331",
+"AMEX60DD052130",
+"AMEX60DD026710",
+"AMEX60DD050397",
+"AMEX60DD039921",
+"AMEX60DD048549",
+"AMEX60DD005574",
+"AMEX60DD021231",
+"AMEX60DDU001009454")
+gene_names = c("UNCX",
+"TCF12",
+"H1-3",
+"HEY1",
+"CILP",
+"SFRP1",
+"RGMB",
+"AP1S1",
+"PPP1R26",
+"C6ORF136",
+"TBX18",
+"ZNF25",
+"RCN2",
+"YBX3",
+"PLPP7",
+"ELOC",
+"LOC113406022",
+"PHACTR4",
+"TMEM184A",
+"CCDC3")
+
+gg_Fig <- FeaturePlot(Tail_LB_35, pt.size = 1, features = gene_ids,order = T, cols = c("grey",rev(viridis_pal(option = "viridis")(12))), repel=T, min.cutoff = "q5", max.cutoff = "q95") & NoLegend()
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Tail_LB_Stage35_UMAP_feature_TBX18cor_UNCXcor_Marker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+	
+#Calculate a score for tbx18 and uncx
+#caudal = uncx
+#rostral = tbx18
+
+
+caudal <- list(gene_ids[1:10])
+rostral <- list(gene_ids[11:20])
+
+Tail_LB_35 <- AddModuleScore(
+  object = Tail_LB_35,
+  features = caudal,
+  name = 'caudal.score'
+)
+Tail_LB_35 <- AddModuleScore(
+  object = Tail_LB_35,
+  features = rostral,
+  name = 'rostral.score'
+)
+
+      
+pdf("Tail_LB_Stage35_UMAP_feature_Rostral_Caudal_Scores.pdf",width=13,height=5)
+FeaturePlot(Tail_LB_35, pt.size = 4, features = c("caudal.score1","rostral.score1"),order = T, cols = c("grey",rev(viridis_pal(option = "viridis")(12))), repel=T, min.cutoff = "q1", max.cutoff = "q99") & NoLegend()
+dev.off()
+	                           
+
+saveRDS(Tail_LB_35, file = "Tail_LB_st35_CPM_SeuratObj.RDS")
+
+```
+
+
+

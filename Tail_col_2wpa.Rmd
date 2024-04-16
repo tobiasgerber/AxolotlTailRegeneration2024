@@ -1,0 +1,451 @@
+---
+title: "Tail_col_2wpa"
+author: "Tobias Gerber"
+date: "7/23/2020"
+output: html_document
+---
+
+```{r}
+
+#Load libraries
+
+library(Seurat)
+library(dplyr)
+library(Matrix)
+library(RColorBrewer)
+
+```
+
+
+##Load Data
+```{r}
+setwd("~/Projects/SingleCellGroup/Axolotl/Tail_Project_2wpa/")
+
+
+#load annotation file
+
+anno = read.delim("/mnt/SingleCellGenomics/genome_data/10xAxolotlGenome/AnnotationFile_AmexG_v6_chr_unscaffolded_CherryGFP_v1.2.csv",sep = ";",header = F)
+rownames(anno) = anno[,1]
+
+
+############# remove weird transposon / unannotated genes
+unannotated.transcripts = rownames(anno)[anno$V2 %in% anno$V2[grep("PEG10",anno$V2)] ]
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("L1TD1",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("RTL",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("GIN1",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("L1\\-RT",anno$V2)] ], unannotated.transcripts))
+unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("^N\\/A",anno$V2)] ], unannotated.transcripts))
+#unannotated.transcripts = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("^AMEX",anno$V2)] ], unannotated.transcripts))
+
+anno = anno[!rownames(anno) %in% unannotated.transcripts,]
+
+
+############# remove rp genes
+
+rp.genes_AmexG = rownames(anno)[anno$V2 %in% anno$V2[grep("RPL",anno$V2)]]
+rp.genes_AmexG = unique(c(rownames(anno)[anno$V2 %in% anno$V2[grep("RPS",anno$V2)] ], rp.genes_AmexG))
+
+anno = anno[!rownames(anno) %in% rp.genes_AmexG,]
+
+
+library(tidyverse)
+
+############# get data and remove genes
+
+Tail_col_2wpa <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/10xGenomics/HLFYTDRXX_R9843/count_123456_2wpa_col1a2_Full_Solo.out/Gene/raw/")
+
+Tail_col_2wpa = Tail_col_2wpa[rownames(anno), ,drop = FALSE]
+
+library(dplyr)
+library(Seurat)
+
+############# load in Seurat
+
+Tail_col_2wpa <- CreateSeuratObject(counts = Tail_col_2wpa, project = "Tail_col_2wpa", min.cells = 3, min.features = 200)
+Tail_col_2wpa
+
+
+```
+
+
+##Run Seurat
+
+###All cells
+
+```{r}
+mito.genes <- c("ND2","ND1","ND3","ND4","ND4L","ND5","ND6")
+mito.contig <- intersect(c(rownames(anno)[anno$V2 %in% mito.genes ] , rownames(anno)[anno$V2 %in% anno$V2[grep("^COX",anno$V2)]] ) , rownames(Tail_col_2wpa))
+
+
+Tail_col_2wpa[["percent.mt"]] <- PercentageFeatureSet(Tail_col_2wpa, features = mito.contig)
+
+
+#parallize scaling
+library(future)
+plan("multiprocess", workers = 8)
+plan()
+
+#set maximum to 50GB for each worker
+options(future.globals.maxSize = 50000 * 1024^2)
+
+#normalize data
+
+Tail_col_2wpa = NormalizeData(Tail_col_2wpa)
+
+plot1 <- FeatureScatter(Tail_col_2wpa, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Tail_col_2wpa, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+
+pdf("./Tail_col_2wpa_QC_PreFilter.pdf",width=10,height=5)
+VlnPlot(Tail_col_2wpa, features = c("nCount_RNA","nFeature_RNA","percent.mt"),pt.size = -1)
+CombinePlots(plots = list(plot1, plot2))
+dev.off()
+
+Tail_col_2wpa <- subset(Tail_col_2wpa, subset = nCount_RNA < 10000  & nCount_RNA > 1000  & percent.mt < 20 )
+
+plot1 <- FeatureScatter(Tail_col_2wpa, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Tail_col_2wpa, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+
+pdf("./Tail_col_2wpa_QC_PostFilter.pdf",width=10,height=5)
+VlnPlot(Tail_col_2wpa, features = c("nCount_RNA","nFeature_RNA","percent.mt"),pt.size = -1)
+CombinePlots(plots = list(plot1, plot2))
+dev.off()
+
+
+#get cell cycle genes
+
+g2m.genes <- cc.genes$g2m.genes
+g2m.contig <- intersect(rownames(anno)[anno$V2 %in% g2m.genes ] , rownames(Tail_col_2wpa) )
+
+s.genes <- cc.genes$s.genes
+s.contig <- intersect(rownames(anno)[anno$V2 %in% s.genes ] , rownames(Tail_col_2wpa) )
+
+#cell cycle scoring
+Tail_col_2wpa <- CellCycleScoring(Tail_col_2wpa, s.features = s.contig, g2m.features = g2m.contig, set.ident = TRUE)
+
+
+#scale
+#ScaleData(  object,  features = NULL,  assay = NULL,  vars.to.regress = NULL,  split.by = NULL,  model.use = "linear",  use.umi = FALSE,  do.scale = TRUE,  do.center = TRUE,  scale.max = 10,  block.size = 1000,  min.cells.to.block = 3000,  verbose = TRUE)
+
+all.genes <- rownames(Tail_col_2wpa)
+
+Tail_col_2wpa = ScaleData(  Tail_col_2wpa, features = all.genes ,vars.to.regress = c("nCount_RNA","percent.mt"))
+
+#run PCA on all genes
+#RunPCA(object, assay = NULL, features = NULL,  npcs = 50, rev.pca = FALSE, weight.by.var = TRUE, verbose = TRUE,  ndims.print = 1:5, nfeatures.print = 30, reduction.name = "pca",  reduction.key = "PC_", seed.use = 42)
+
+all.genes.noFluo = all.genes[!all.genes %in% c("eGFP","mCherry")]
+
+Tail_col_2wpa = RunPCA(Tail_col_2wpa,features = all.genes.noFluo,npcs = 100)
+
+#plot PCA heatmaps
+#DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+
+library(RColorBrewer)
+
+pdf("Tail_col_2wpa_PCAheatmaps.pdf",width=30,height=20)
+DimHeatmap(Tail_col_2wpa, dims = 1:16, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Tail_col_2wpa, dims = 17:32, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Tail_col_2wpa, dims = 33:48, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Tail_col_2wpa, dims = 49:64, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Tail_col_2wpa, dims = 65:80, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Tail_col_2wpa, dims = 81:96, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+dev.off()
+
+#elbow plot
+pdf("Tail_col_2wpa_PCelbow.pdf",width=20,height=10)
+ElbowPlot(Tail_col_2wpa, ndims = 100)
+dev.off()
+
+#Cluster cells
+Tail_col_2wpa<- FindNeighbors(Tail_col_2wpa, dims = 1:50)
+Tail_col_2wpa <- FindClusters(Tail_col_2wpa, resolution = 0.8)
+
+#run UMAP
+Tail_col_2wpa = RunUMAP(Tail_col_2wpa,dims = 1:50)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Tail_col_2wpa_UMAP_PC50_res0.8.pdf",width=10,height=10)
+DimPlot(object = Tail_col_2wpa, reduction = 'umap', pt.size = 2)
+dev.off()
+
+pdf("Tail_col_2wpa_UMAP_feature.pdf",width=8,height=10)
+FeaturePlot(Tail_col_2wpa, pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA","percent.mt","mCherry","eGFP"),order = T, cols = c(brewer.pal(9,"Greys")[9:2],brewer.pal(9,"Reds")[2:9]))
+dev.off()
+
+
+#c0/4 low nCount
+
+Tail_col_2wpa <- subset(Tail_col_2wpa, idents = c(1,2,3,5,6,7,8,9,10,11,12,13,14,15) )
+
+
+#Cluster cells
+Tail_col_2wpa<- FindNeighbors(Tail_col_2wpa, dims = 1:50)
+Tail_col_2wpa <- FindClusters(Tail_col_2wpa, resolution = 0.8)
+
+#run UMAP
+Tail_col_2wpa = RunUMAP(Tail_col_2wpa,dims = 1:50)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Tail_col_2wpa_UMAP_PC50_res0.8.pdf",width=10,height=10)
+DimPlot(object = Tail_col_2wpa, reduction = 'umap', pt.size = 2)
+dev.off()
+
+
+
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Tail_col_2wpa, only.pos = TRUE,  logfc.threshold = 0.3)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno, by.x="gene" , by.y="V1")
+markers.anno$ID = markers.anno$gene
+
+#markers.anno = markers.anno[order(as.numeric(markers.anno$cluster)),]
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_log2FC))
+
+write.csv(markers.anno,"Tail_col_2wpa_allMarker.csv")
+
+
+#c6/9 macrophages
+#c14 epidermis
+#c13 skeletal
+#c12 muscle
+
+saveRDS(Tail_col_2wpa, file = "Tail_col_2wpa_SeuratObj.RDS")
+
+```
+
+COL6A1	AMEX60DD055540
+TWIST3-TWIST2	AMEX60DD029436
+TNMD	AMEX60DD037674
+ASPN	AMEX60DD023964
+MEOX1	AMEX60DD009987
+MGP	AMEX60DD030520
+CNMD	AMEX60DD048972
+OTOS	AMEX60DD002658
+GREM1	AMEX60DD012132
+PRRX1	AMEX60DD018450
+MYH11	AMEX60DD020580
+ACTA2	AMEX60DD052517
+TAGLN	AMEX60DD053922
+COL8A1	AMEX60DD048332
+MATN3	AMEX60DD033105
+C1QB	AMEX60DD052070
+LGALS3BP	AMEX60DD031414
+PLBD1	AMEX60DD029125
+LECT2	AMEX60DD024964
+S100P	AMEX60DD045921
+EPCAM	AMEX60DD035908
+VWF	AMEX60DD006619
+PLVAP	AMEX60DD013910
+
+
+AMEX60DD018450    PRRX1
+AMEX60DD009987    MEOX1	
+AMEX60DD022442    MEOX2	
+AMEX60DD040818    SCX
+AMEX60DD037674    TNMD
+AMEX60DD052322    PAX7
+AMEX60DD042540    MEF2C
+AMEX60DD007644    MYF5
+AMEX60DD055512    TWIST2
+AMEX60DD029436    TWIST3
+AMEX60DD031236    SOX9
+AMEX60DD002658    OTOS
+AMEX60DD037123    CHRDL1
+AMEX60DD036008    PKDCC
+AMEX60DD004178    ACAN
+AMEX60DD048972    CNMD
+AMEX60DD029426	COL2A1
+
+####Plot Marker
+
+```{r}
+#plot markers
+
+library(RColorBrewer)
+library(viridis)
+
+gene_ids = c("AMEX60DD055540","AMEX60DD029436","AMEX60DD037674","AMEX60DD023964","AMEX60DD009987","AMEX60DD030520","AMEX60DD048972","AMEX60DD002658","AMEX60DD012132","AMEX60DD018450","AMEX60DD020580","AMEX60DD052517","AMEX60DD053922","AMEX60DD048332","AMEX60DD033105","AMEX60DD052070","AMEX60DD031414","AMEX60DD029125","AMEX60DD024964","AMEX60DD045921","AMEX60DD035908","AMEX60DD006619","AMEX60DD013910","AMEX60DD012191","AMEX60DD041421","AMEX60DD027586","AMEX60DD001756","AMEX60DD055612")
+
+gene_names =c("COL6A1","TWIST3-TWIST2","TNMD","ASPN","MEOX1","MGP","CNMD","OTOS","GREM1","PRRX1","MYH11","ACTA2","TAGLN","COL8A1","MATN3","C1QB","LGALS3BP","PLBD1","LECT2","S100P","EPCAM","VWF","PLVAP","COCH","MSMP","SULF2","MECOM","HOXD13")
+
+gg_Fig <- FeaturePlot(Tail_col_2wpa, pt.size = 0.5, features = gene_ids,order = T, cols = c("grey",rev(viridis_pal(option = "viridis")(12))), repel=T)
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) & NoLegend() & NoAxes()})
+
+pdf("Tail_col_2wpa_UMAP_feature_GeneralCellTypeMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+library(viridis)
+
+gene_ids = c("AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD021249","AMEX60DD027155","AMEX60DD009987","AMEX60DD022442","AMEX60DD040818","AMEX60DD037674","AMEX60DD052322","AMEX60DD007644","AMEX60DD055512","AMEX60DD029436","AMEX60DD031236","AMEX60DD002658","AMEX60DD037123","AMEX60DD036008","AMEX60DD004178","AMEX60DD048972","AMEX60DD029426","eGFP","mCherry","AMEX60DD054775")
+	
+gene_names =c("PRRX1","RSPO3","FGF8","TBX18","UNCX","TCF15","MEOX1","MEOX2","SCX","TNMD","PAX7","MYF5","TWIST2","TWIST3","SOX9","OTOS","CHRDL1","PKDCC","ACAN","CNMD","COL2A1","eGFP","mCherry","CALYMMIN")
+
+gg_Fig <- FeaturePlot(Tail_col_2wpa, pt.size = 0.2, features = gene_ids,order = T, cols = c("grey",rev(viridis_pal(option = "viridis")(12))), repel=T)
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) & NoLegend() & NoAxes()})
+
+pdf("Tail_col_2wpa_UMAP_feature_ABMarker.pdf",width=15,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+```
+
+### CT
+
+```{r}
+
+
+#c6/9 macrophages
+#c14 epidermis
+#c13 skeletal
+#c12 muscle
+
+######select clean CT descendant population
+
+Tail_col_2wpa_CT <- subset(Tail_col_2wpa, idents = c(0,1,2,3,4,5,7,8,10,11,12) )
+
+#run PCA on all genes
+#RunPCA(object, assay = NULL, features = NULL,  npcs = 50, rev.pca = FALSE, weight.by.var = TRUE, verbose = TRUE,  ndims.print = 1:5, nfeatures.print = 30, reduction.name = "pca",  reduction.key = "PC_", seed.use = 42)
+
+#Recluster cells to get a clean population
+Tail_col_2wpa_CT<- FindNeighbors(Tail_col_2wpa_CT, dims = 1:50)
+Tail_col_2wpa_CT <- FindClusters(Tail_col_2wpa_CT, resolution = 0.8)
+
+#run UMAP
+Tail_col_2wpa_CT = RunUMAP(Tail_col_2wpa_CT,dims = 1:50,min.dist = 0.01)
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Tail_col_2wpa_CT_UMAP_PC50_res0.8.pdf",width=10,height=10)
+DimPlot(object = Tail_col_2wpa_CT, reduction = 'umap', shuffle = T, pt.size = 2)
+FeaturePlot(Tail_col_2wpa_CT, pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA","percent.mt","mCherry","eGFP"),order = T, cols = c(brewer.pal(9,"Greys")[9:2],brewer.pal(9,"Reds")[2:9]))
+dev.off()
+
+#no contamination clusters identified
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Tail_col_2wpa_CT, only.pos = TRUE,  logfc.threshold = 0.3)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno, by.x="gene" , by.y="V1")
+markers.anno$ID = markers.anno$gene
+
+#markers.anno = markers.anno[order(as.numeric(markers.anno$cluster)),]
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_log2FC))
+
+write.csv(markers.anno,"Tail_col_2wpa_CT_allMarker.csv")
+
+
+gene_ids = c("AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD021249","AMEX60DD027155","AMEX60DD009987","AMEX60DD022442","AMEX60DD040818","AMEX60DD037674","AMEX60DD052322","AMEX60DD007644","AMEX60DD055512","AMEX60DD029436","AMEX60DD031236","AMEX60DD002658","AMEX60DD037123","AMEX60DD036008","AMEX60DD004178","AMEX60DD048972","AMEX60DD029426","AMEX60DD007033","AMEX60DD009952","AMEX60DD023726","AMEX60DD034517","AMEX60DD043904","AMEX60DD009968","AMEX60DD038105","AMEX60DD027586","AMEX60DD054775")
+	
+gene_names =c("PRRX1","RSPO3","FGF8","TBX18","UNCX","TCF15","MEOX1","MEOX2","SCX","TNMD","PAX7","MYF5","TWIST2","TWIST3","SOX9","OTOS","CHRDL1","PKDCC","ACAN","CNMD","COL2A1","FAM180A","DLX3","WNT5A","DLL1","SPP1","PHOSPHO1","INHBA","SULF2","CALYMMIN")
+
+
+
+gg_Fig <- FeaturePlot(Tail_col_2wpa_CT, pt.size = 0.2, features = gene_ids,order = T, cols = c("grey",rev(viridis_pal(option = "viridis")(12))), repel=T)
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) & NoLegend() & NoAxes()})
+
+pdf("Tail_col_2wpa_CT_UMAP_feature_ABMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+gene_ids = c("AMEX60DD034517","AMEX60DD021181","AMEX60DD021249","AMEX60DD051586","AMEX60DD018450","AMEX60DD034707","AMEX60DD052891","AMEX60DD033766","AMEX60DD027155","AMEX60DD009987","AMEX60DD022442","AMEX60DD040818","AMEX60DD037674","AMEX60DD007644","AMEX60DD052322","AMEX60DD055512","AMEX60DD029436","AMEX60DD054625","AMEX60DD007033","AMEX60DD018705","AMEX60DD024616","AMEX60DD038300","AMEX60DD012132","AMEX60DD031236","AMEX60DD002658","AMEX60DD037123","AMEX60DD036008","AMEX60DD004178","AMEX60DD048972","AMEX60DD029426","AMEX60DD005459","AMEX60DD043904","AMEX60DD049488","AMEX60DD033105","AMEX60DD038318","AMEX60DD031842","AMEX60DD047873","AMEX60DD034687","AMEX60DD008143","AMEX60DD048840","AMEX60DD043904","AMEX60DD009968")
+gene_names =c("DLL1","LFNG","UNCX","HES5","PRRX1","RSPO3","FGF8","TBX18","TCF15","MEOX1","MEOX2","SCX","TNMD","MYF5","PAX7","TWIST2","TWIST3","TBX2","FAM180A","F13B","LTBP4","F13A1","GREM1","SOX9","OTOS","CHRDL1","PKDCC","ACAN","CNMD","COL2A1","MATN1","SPP1","MMP13","MATN3","DSP","COL5A3","COL4A1","LAMA2","ITIH5","KLF5","SPP1","PHOSPHO1")
+	
+
+gg_Fig <- FeaturePlot(Tail_col_2wpa_CT, pt.size = 2, features = gene_ids,order = T,raster = T, cols = c("grey",rev(viridis_pal(option = "viridis")(12))), repel=T)
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) & NoLegend() & NoAxes()})
+
+pdf("Tail_col_2wpa_CT_UMAP_feature_TailRegMarker.pdf",width=13,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+saveRDS(Tail_col_2wpa_CT, file = "Tail_col_2wpa_CT_SeuratObj.RDS")
+
+```
+
+##Run Velocity
+```{r}
+
+Tail_col_2wpa_spliced <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/10xGenomics/HLFYTDRXX_R9843/count_123456_2wpa_col1a2_Full_Solo.out/Velocyto/raw/spliced")
+Tail_col_2wpa_spliced = Tail_col_2wpa_spliced[rownames(anno), ,drop = FALSE]
+Tail_col_2wpa_spliced <- CreateSeuratObject(counts = Tail_col_2wpa_spliced, project = "Tail_col_2wpa_spliced", min.cells = 1, min.features = 1)
+
+Tail_col_2wpa_unspliced <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/10xGenomics/HLFYTDRXX_R9843/count_123456_2wpa_col1a2_Full_Solo.out/Velocyto/raw/unspliced")
+Tail_col_2wpa_unspliced = Tail_col_2wpa_unspliced[rownames(anno), ,drop = FALSE]
+Tail_col_2wpa_unspliced <- CreateSeuratObject(counts = Tail_col_2wpa_unspliced, project = "Tail_col_2wpa_unspliced", min.cells = 1, min.features = 1)
+
+Tail_col_2wpa_spliced = subset(Tail_col_2wpa_spliced, cells = colnames(Tail_col_2wpa))
+Tail_col_2wpa_unspliced = subset(Tail_col_2wpa_unspliced, cells = colnames(Tail_col_2wpa))
+
+#Velocity
+
+library(velocyto.R)
+
+Tail_col_2wpa_CT_spliced = subset(Tail_col_2wpa_spliced,cells = colnames(Tail_col_2wpa_CT))
+Tail_col_2wpa_CT_unspliced = subset(Tail_col_2wpa_unspliced,cells = colnames(Tail_col_2wpa_CT))
+
+
+emat <- GetAssayData(Tail_col_2wpa_CT_spliced, slot = "counts")
+nmat <- GetAssayData(Tail_col_2wpa_CT_unspliced, slot = "counts")
+
+# take cluster labels
+cluster.label <- Tail_col_2wpa_CT@meta.data$seurat_cluster
+names(cluster.label) = colnames(Tail_col_2wpa_CT)
+
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+cell.colors = gg_color_hue(length(unique(Tail_col_2wpa_CT@meta.data$seurat_cluster)))
+#cell.colors <-  colorRampPalette(brewer.pal(12,"Set1"))(length(unique(BLct_CSDct_filter@meta.data$orig.ident)))
+
+names(cell.colors) <- unique(cluster.label)
+
+cell.cols <- cell.colors[cluster.label]
+names(cell.cols) = colnames(Tail_col_2wpa_CT)
+
+# take embedding
+emb <- Embeddings(Tail_col_2wpa_CT, "umap")
+
+# filter genes
+emat <- filter.genes.by.cluster.expression(emat,cluster.label,min.max.cluster.average = 0.5)
+nmat <- filter.genes.by.cluster.expression(nmat,cluster.label,min.max.cluster.average = 0.05)
+
+length(intersect(rownames(emat),rownames(emat)))
+
+#Estimate RNA velocity (using gene-relative model with k=20 cell kNN pooling and using top/bottom 2% quantiles for gamma fit):
+
+fit.quantile <- 0.1
+rvel.cd <- gene.relative.velocity.estimates(emat,nmat,deltaT=1,kCells=20,fit.quantile=fit.quantile)
+#cell.dist=cell.dist,
+
+#Visualize velocity on the t-SNE embedding, using velocity vector fields:
+pdf("Tail_col_2wpa_CT_UMAP_Velocity.pdf",width=10,height=10)
+show.velocity.on.embedding.cor(emb,rvel.cd,n=200,scale='sqrt',cell.colors=cell.cols,cex=0.8,arrow.scale=1,show.grid.flow=TRUE,min.grid.cell.mass=0.1,grid.n=50,do.par=F,n.cores=50,cell.border.alpha = 0)
+dev.off()
+
+#Zhisong example
+#show.velocity.on.embedding.cor(spring.coor,rvel.cd,n=200,scale='sqrt',cell.colors=cell.cols,cex=2,arrow.scale=1000,show.grid.flow=TRUE,min.grid.cell.mass=0.1,grid.n=80,do.par=T,cell.border.alpha = 0.1,n.cores=25, arrow.lwd = 2, bty="n", xaxt="n", yaxt="n")
+
+
+
+
+```
